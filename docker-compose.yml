@@ -1,0 +1,23 @@
+services:
+  api:
+    build: .
+    command: python -m rag_news.interfaces.cli api
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - rag_news_data:/app/data
+
+  worker:
+    build: .
+    command: python -m rag_news.interfaces.cli worker
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - rag_news_data:/app/data
+
+volumes:
+  rag_news_data:
