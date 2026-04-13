@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from logging import getLogger
 
@@ -42,13 +43,28 @@ class DigestScheduler:
             logger.warning("Telegram is not configured; skipping scheduled digest")
             return
 
-        result = await self.service.graph.build_digest(
-            self.service.settings.news_daily_query
-        )
-        message = format_digest(result, rich_text=True)
-        await self.application.bot.send_message(
-            chat_id=self.service.settings.telegram_chat_id,
-            text=message,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
-        )
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            try:
+                result = await self.service.graph.build_digest(
+                    self.service.settings.news_daily_query
+                )
+                message = format_digest(result, rich_text=True)
+                await self.application.bot.send_message(
+                    chat_id=self.service.settings.telegram_chat_id,
+                    text=message,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                )
+                return
+            except Exception as exc:  # pragma: no cover - provider/network failures
+                logger.warning(
+                    "Scheduled digest attempt %s/%s failed: %s",
+                    attempt,
+                    attempts,
+                    type(exc).__name__,
+                )
+                if attempt < attempts:
+                    await asyncio.sleep(2 * attempt)
+
+        logger.error("Scheduled digest failed after %s attempts", attempts)

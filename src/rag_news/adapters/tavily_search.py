@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from logging import getLogger
 from typing import Any
+from urllib.parse import urlparse
 
 from tavily import TavilyClient
 from tavily.errors import BadRequestError
@@ -52,10 +53,10 @@ class TavilyNewsSearch:
                     max_results=top_k or self.settings.web_top_k,
                 )
             else:
-                logger.warning("Tavily search failed: %s", exc)
+                logger.warning("Tavily search failed: %s", type(exc).__name__)
                 return []
         except Exception as exc:  # pragma: no cover - defensive fallback
-            logger.warning("Tavily search failed: %s", exc)
+            logger.warning("Tavily search failed: %s", type(exc).__name__)
             return []
 
         results = response.get("results", []) if isinstance(response, dict) else []
@@ -71,11 +72,14 @@ class TavilyNewsSearch:
         content = str(result.get("content") or result.get("raw_content") or "").strip()
         if not content:
             return None
+        url = str(result.get("url", ""))
+        if url and not self._is_valid_url(url):
+            return None
         summary = str(result.get("content", "")).strip()
         return NewsDocument(
             title=title,
             content=content,
-            url=str(result.get("url", "")),
+            url=url,
             source=str(result.get("source", "tavily")),
             published_at=str(
                 result.get("published_date") or result.get("published_at") or ""
@@ -85,3 +89,8 @@ class TavilyNewsSearch:
             score=float(result.get("score", 0.0) or 0.0),
             id=str(result.get("id") or ""),
         )
+
+    @staticmethod
+    def _is_valid_url(value: str) -> bool:
+        parsed = urlparse(value)
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)

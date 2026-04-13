@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import html
 import json
 from typing import Any
@@ -104,15 +103,10 @@ def _parse_structured_answer(answer_text: str) -> dict[str, Any] | None:
 
     try:
         parsed = json.loads(answer_text)
-        if isinstance(parsed, dict):
-            return parsed
+        if not isinstance(parsed, dict):
+            return None
+        allowed = {"summary", "headline", "key_points", "cautionary_note"}
+        filtered = {key: value for key, value in parsed.items() if key in allowed}
+        return filtered or None
     except json.JSONDecodeError:
-        pass
-
-    try:
-        parsed = ast.literal_eval(answer_text)
-    except (SyntaxError, ValueError):
         return None
-    if isinstance(parsed, dict):
-        return parsed
-    return None

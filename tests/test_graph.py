@@ -38,6 +38,11 @@ def _settings(tmp_path: Path) -> Settings:
         log_level="INFO",
         http_host="0.0.0.0",
         http_port=8000,
+        http_api_key=None,
+        max_question_length=1000,
+        max_requests_per_minute=20,
+        embedding_backend="hash",
+        embedding_model="all-MiniLM-L6-v2",
     )
 
 
@@ -65,7 +70,17 @@ class FakeLLM:
     ) -> str:
         return "more specific news query"
 
-    async def generate_answer(self, question: str, query: str, documents) -> AnswerText:
+    async def generate_chat_answer(
+        self, question: str, query: str, documents
+    ) -> AnswerText:
+        return AnswerText(
+            answer=f"answer for {question}",
+            sources=[document.url for document in documents if document.url],
+        )
+
+    async def generate_analysis_answer(
+        self, question: str, query: str, documents
+    ) -> AnswerText:
         return AnswerText(
             answer=f"answer for {question}",
             sources=[document.url for document in documents if document.url],

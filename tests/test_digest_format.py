@@ -6,9 +6,9 @@ from rag_news.core.graph import GraphResult
 
 def test_format_digest_renders_structured_answer() -> None:
     answer = (
-        "{'summary': 'Daily summary text.', "
-        "'key_points': ['Point one', 'Point two'], "
-        "'cautionary_note': 'Use caution.'}"
+        '{"summary": "Daily summary text.", '
+        '"key_points": ["Point one", "Point two"], '
+        '"cautionary_note": "Use caution."}'
     )
     result = GraphResult(
         question="q",

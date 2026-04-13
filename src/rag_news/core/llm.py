@@ -162,7 +162,7 @@ class NewsLLM:
                     document.url for document in documents if document.url
                 ]
                 return AnswerText(
-                    answer=str(response["answer"]).strip(),
+                    answer=self._normalize_answer_text(response.get("answer")),
                     sources=[str(item) for item in sources],
                 )
 
@@ -193,7 +193,7 @@ class NewsLLM:
                     document.url for document in documents if document.url
                 ]
                 return AnswerText(
-                    answer=str(response["answer"]).strip(),
+                    answer=self._normalize_answer_text(response.get("answer")),
                     sources=[str(item) for item in sources],
                 )
 
@@ -220,7 +220,7 @@ class NewsLLM:
                 ],
             )
         except Exception as exc:  # pragma: no cover - defensive fallback
-            logger.warning("OpenAI request failed: %s", exc)
+            logger.warning("OpenAI request failed: %s", type(exc).__name__)
             return {}
 
         content = response.choices[0].message.content if response.choices else None
@@ -250,7 +250,7 @@ class NewsLLM:
                 ),
             )
         except Exception as exc:  # pragma: no cover - defensive fallback
-            logger.warning("Google request failed: %s", exc)
+            logger.warning("Google request failed: %s", type(exc).__name__)
             return {}
 
         text = getattr(response, "text", None) or ""
@@ -321,8 +321,6 @@ class NewsLLM:
             "Key points:",
             *key_points,
         ]
-        if sources:
-            answer.extend(["Sources:", *[f"- {source}" for source in sources[:5]]])
         return AnswerText(answer="\n".join(answer), sources=sources)
 
     def _tokens(self, text: str) -> set[str]:
@@ -345,3 +343,15 @@ class NewsLLM:
             "source": document.source,
             "published_at": document.published_at,
         }
+
+    @staticmethod
+    def _normalize_answer_text(answer: Any) -> str:
+        if isinstance(answer, dict):
+            allowed = {"summary", "headline", "key_points", "cautionary_note"}
+            filtered = {key: answer[key] for key in allowed if key in answer}
+            if filtered:
+                return json.dumps(filtered, ensure_ascii=False)
+            return json.dumps(answer, ensure_ascii=False)
+        if isinstance(answer, list):
+            return json.dumps(answer, ensure_ascii=False)
+        return str(answer or "").strip()

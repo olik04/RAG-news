@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypedDict
+from logging import getLogger
+from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 from rag_news.adapters.chroma_repository import ChromaNewsRepository
 from rag_news.adapters.tavily_search import TavilyNewsSearch
 from rag_news.config.settings import Settings
+from rag_news.core.exceptions import RepositoryError
 from rag_news.core.llm import NewsLLM
-from rag_news.domain.models import GradeResult, NewsDocument
+from rag_news.domain.models import GradeResult, NewsDocument, SearchMode
 
 
-SearchMode = Literal["local", "web"]
+logger = getLogger(__name__)
 
 
 class GraphState(TypedDict, total=False):
@@ -57,7 +59,7 @@ class NewsSentinelGraph:
             {
                 "question": question,
                 "query": question,
-                "search_mode": "local",
+                "search_mode": SearchMode.LOCAL,
                 "attempts": 0,
                 "documents": [],
                 "graded_documents": [],
@@ -81,7 +83,7 @@ class NewsSentinelGraph:
             {
                 "question": query,
                 "query": query,
-                "search_mode": "analysis",
+                "search_mode": SearchMode.ANALYSIS,
                 "attempts": 0,
                 "documents": [],
                 "graded_documents": [],
@@ -118,17 +120,39 @@ class NewsSentinelGraph:
 
     async def _retrieve(self, state: GraphState) -> GraphState:
         query = state.get("query") or state["question"]
-        mode = state.get("search_mode", "local")
+        mode = state.get("search_mode", SearchMode.LOCAL)
 
-        if mode == "web":
-            documents = self.search.search(
-                query, days=self.settings.news_days_back, top_k=self.settings.web_top_k
-            )
+        if mode == SearchMode.WEB:
+            try:
+                documents = self.search.search(
+                    query,
+                    days=self.settings.news_days_back,
+                    top_k=self.settings.web_top_k,
+                )
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                logger.warning("Web retrieval failed: %s", type(exc).__name__)
+                documents = []
             if documents:
-                self.repository.upsert_documents(documents)
+                try:
+                    self.repository.upsert_documents(documents)
+                except RepositoryError as exc:  # pragma: no cover - storage fallback
+                    logger.warning(
+                        "Failed to persist web documents: %s", type(exc).__name__
+                    )
             return {"documents": documents}
 
-        local_documents = self.repository.search(query, top_k=self.settings.local_top_k)
+        try:
+            recency_days = (
+                self.settings.news_days_back if mode == SearchMode.ANALYSIS else None
+            )
+            local_documents = self.repository.search(
+                query,
+                top_k=self.settings.local_top_k,
+                days_back=recency_days,
+            )
+        except RepositoryError as exc:
+            logger.warning("Local retrieval failed: %s", type(exc).__name__)
+            local_documents = []
         return {"documents": local_documents}
 
     async def _grade_documents(self, state: GraphState) -> GraphState:
@@ -162,7 +186,7 @@ class NewsSentinelGraph:
         )
         return {
             "query": query,
-            "search_mode": "web",
+            "search_mode": SearchMode.WEB,
             "attempts": attempts,
             "documents": documents,
             "graded_documents": state.get("graded_documents", []),
@@ -173,15 +197,13 @@ class NewsSentinelGraph:
         question = state["question"]
         query = state.get("query", question)
         documents = state.get("graded_documents") or state.get("documents") or []
-        if not documents:
-            documents = self.repository.search(query, top_k=self.settings.local_top_k)
         if (
             state.get("question") == self.settings.news_daily_query
-            or state.get("search_mode") == "analysis"
+            or state.get("search_mode") == SearchMode.ANALYSIS
         ):
-            answer = await self._generate_analysis_answer(question, query, documents)
+            answer = await self.llm.generate_analysis_answer(question, query, documents)
         else:
-            answer = await self._generate_chat_answer(question, query, documents)
+            answer = await self.llm.generate_chat_answer(question, query, documents)
         return {
             "answer": answer.answer,
             "sources": answer.sources,
@@ -189,24 +211,10 @@ class NewsSentinelGraph:
             "graded_documents": documents,
         }
 
-    async def _generate_chat_answer(
-        self, question: str, query: str, documents: list[NewsDocument]
-    ):
-        if hasattr(self.llm, "generate_chat_answer"):
-            return await self.llm.generate_chat_answer(question, query, documents)
-        return await self.llm.generate_answer(question, query, documents)
-
-    async def _generate_analysis_answer(
-        self, question: str, query: str, documents: list[NewsDocument]
-    ):
-        if hasattr(self.llm, "generate_analysis_answer"):
-            return await self.llm.generate_analysis_answer(question, query, documents)
-        return await self.llm.generate_answer(question, query, documents)
-
     def _route_after_grading(self, state: GraphState) -> str:
         graded_documents = state.get("graded_documents") or []
         attempts = int(state.get("attempts", 0))
-        if graded_documents and len(graded_documents) >= 2:
+        if graded_documents:
             return "generate_answer"
         if attempts >= self.settings.max_retrieval_attempts:
             return "generate_answer"

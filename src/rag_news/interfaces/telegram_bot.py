@@ -14,6 +14,7 @@ from telegram.ext import (
 )
 
 from rag_news.core.digest import format_answer
+from rag_news.core.rate_limiter import SlidingWindowRateLimiter
 from rag_news.core.service import ServiceBundle
 from rag_news.jobs.scheduler import DigestScheduler
 
@@ -26,6 +27,7 @@ class TelegramNewsBot:
     service: ServiceBundle
     application: Application = field(init=False)
     scheduler: DigestScheduler = field(init=False)
+    rate_limiter: SlidingWindowRateLimiter = field(init=False)
 
     def __post_init__(self) -> None:
         if not self.service.settings.telegram_bot_token:
@@ -37,6 +39,10 @@ class TelegramNewsBot:
             .build()
         )
         self.scheduler = DigestScheduler(self.service, self.application)
+        self.rate_limiter = SlidingWindowRateLimiter(
+            max_requests=self.service.settings.max_requests_per_minute,
+            window_seconds=60,
+        )
         self.application.add_handler(CommandHandler("start", self._start))
         self.application.add_handler(CommandHandler("help", self._help))
         self.application.add_handler(CommandHandler("ask", self._ask))
@@ -78,8 +84,33 @@ class TelegramNewsBot:
         await self._respond(update, text)
 
     async def _respond(self, update: Update, question: str) -> None:
-        result = await self.service.graph.answer_question(question)
-        await update.effective_message.reply_text(
+        message = update.effective_message
+        if message is None:
+            return
+
+        if len(question) > self.service.settings.max_question_length:
+            await message.reply_text(
+                f"Question is too long. Maximum length is {self.service.settings.max_question_length} characters."
+            )
+            return
+
+        user_id = update.effective_user.id if update.effective_user else "anonymous"
+        if not self.rate_limiter.allow(user_id):
+            await message.reply_text(
+                "Rate limit exceeded. Please try again in a minute."
+            )
+            return
+
+        try:
+            result = await self.service.graph.answer_question(question)
+        except Exception as exc:  # pragma: no cover - network/provider failures
+            logger.error("Failed to answer Telegram question: %s", type(exc).__name__)
+            await message.reply_text(
+                "I hit a temporary error while processing that request. Please try again in a moment."
+            )
+            return
+
+        await message.reply_text(
             format_answer(result, rich_text=True),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
@@ -88,7 +119,9 @@ class TelegramNewsBot:
     async def _on_error(
         self, update: object, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        logger.exception("Unhandled Telegram update error", exc_info=context.error)
+        logger.error(
+            "Unhandled Telegram update error: %s", type(context.error).__name__
+        )
         if isinstance(update, Update) and update.effective_message is not None:
             await update.effective_message.reply_text(
                 "I hit a temporary error while processing that request. Please try again in a moment."

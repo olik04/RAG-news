@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 
 def _stable_id(*parts: str) -> str:
     return str(uuid5(NAMESPACE_URL, "::".join(part.strip() for part in parts if part)))
+
+
+class SearchMode(str, Enum):
+    LOCAL = "local"
+    WEB = "web"
+    ANALYSIS = "analysis"
 
 
 @dataclass(slots=True)

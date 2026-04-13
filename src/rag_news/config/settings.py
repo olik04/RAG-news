@@ -41,6 +41,27 @@ class Settings:
     log_level: str
     http_host: str
     http_port: int
+    http_api_key: str | None
+    max_question_length: int
+    max_requests_per_minute: int
+    embedding_backend: str
+    embedding_model: str
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.digest_hour <= 23:
+            raise ValueError("DIGEST_HOUR must be between 0 and 23")
+        if not 0 <= self.digest_minute <= 59:
+            raise ValueError("DIGEST_MINUTE must be between 0 and 59")
+        if self.max_retrieval_attempts < 0:
+            raise ValueError("MAX_RETRIEVAL_ATTEMPTS must be non-negative")
+        if self.local_top_k <= 0 or self.web_top_k <= 0:
+            raise ValueError("LOCAL_TOP_K and WEB_TOP_K must be positive")
+        if self.max_question_length <= 0:
+            raise ValueError("MAX_QUESTION_LENGTH must be positive")
+        if self.max_requests_per_minute <= 0:
+            raise ValueError("MAX_REQUESTS_PER_MINUTE must be positive")
+        if self.embedding_backend not in {"semantic", "hash"}:
+            raise ValueError("EMBEDDING_BACKEND must be either 'semantic' or 'hash'")
 
     @property
     def timezone(self) -> ZoneInfo:
@@ -65,6 +86,10 @@ class Settings:
     @property
     def has_telegram(self) -> bool:
         return bool(self.telegram_bot_token and self.telegram_chat_id)
+
+    @property
+    def has_http_api_key(self) -> bool:
+        return bool(self.http_api_key)
 
 
 def load_settings() -> Settings:
@@ -104,4 +129,10 @@ def load_settings() -> Settings:
         log_level=_get_env("LOG_LEVEL", "INFO") or "INFO",
         http_host=_get_env("HTTP_HOST", "0.0.0.0") or "0.0.0.0",
         http_port=int(_get_env("HTTP_PORT", "8000") or 8000),
+        http_api_key=_get_env("HTTP_API_KEY"),
+        max_question_length=int(_get_env("MAX_QUESTION_LENGTH", "1000") or 1000),
+        max_requests_per_minute=int(_get_env("MAX_REQUESTS_PER_MINUTE", "20") or 20),
+        embedding_backend=_get_env("EMBEDDING_BACKEND", "semantic") or "semantic",
+        embedding_model=_get_env("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+        or "all-MiniLM-L6-v2",
     )
