@@ -33,6 +33,11 @@ def _settings(tmp_path: Path) -> Settings:
         local_top_k=5,
         web_top_k=5,
         news_days_back=1,
+        news_retention_days=30,
+        news_retention_enabled=True,
+        purge_hour=2,
+        purge_minute=0,
+        purge_batch_size=500,
         log_level="INFO",
         http_host="0.0.0.0",
         http_port=8000,
@@ -41,6 +46,20 @@ def _settings(tmp_path: Path) -> Settings:
         max_requests_per_minute=20,
         embedding_backend="hash",
         embedding_model="all-MiniLM-L6-v2",
+        api_timeout_seconds=5.0,
+        api_max_retries=3,
+        api_backoff_factor=2.0,
+        api_jitter_factor=0.1,
+        llm_api_timeout_seconds=None,
+        llm_api_max_retries=None,
+        llm_api_backoff_factor=None,
+        llm_api_jitter_factor=None,
+        tavily_api_timeout_seconds=None,
+        tavily_api_max_retries=None,
+        tavily_api_backoff_factor=None,
+        tavily_api_jitter_factor=None,
+        scheduler_digest_max_retries=3,
+        scheduler_digest_backoff_seconds=2.0,
     )
 
 
@@ -49,7 +68,9 @@ class FakeSearch:
         self.responses = responses
         self.calls: list[dict[str, object]] = []
 
-    def search(self, query: str, *, days: int | None = None, top_k: int | None = None):
+    async def search(
+        self, query: str, *, days: int | None = None, top_k: int | None = None
+    ):
         self.calls.append({"query": query, "days": days, "top_k": top_k})
         if self.responses:
             return self.responses.pop(0)
@@ -208,6 +229,11 @@ async def test_graph_stops_after_max_attempts_when_no_relevant_docs(
         local_top_k=base_settings.local_top_k,
         web_top_k=base_settings.web_top_k,
         news_days_back=base_settings.news_days_back,
+        news_retention_days=base_settings.news_retention_days,
+        news_retention_enabled=base_settings.news_retention_enabled,
+        purge_hour=base_settings.purge_hour,
+        purge_minute=base_settings.purge_minute,
+        purge_batch_size=base_settings.purge_batch_size,
         log_level=base_settings.log_level,
         http_host=base_settings.http_host,
         http_port=base_settings.http_port,
@@ -216,6 +242,20 @@ async def test_graph_stops_after_max_attempts_when_no_relevant_docs(
         max_requests_per_minute=base_settings.max_requests_per_minute,
         embedding_backend=base_settings.embedding_backend,
         embedding_model=base_settings.embedding_model,
+        api_timeout_seconds=base_settings.api_timeout_seconds,
+        api_max_retries=base_settings.api_max_retries,
+        api_backoff_factor=base_settings.api_backoff_factor,
+        api_jitter_factor=base_settings.api_jitter_factor,
+        llm_api_timeout_seconds=base_settings.llm_api_timeout_seconds,
+        llm_api_max_retries=base_settings.llm_api_max_retries,
+        llm_api_backoff_factor=base_settings.llm_api_backoff_factor,
+        llm_api_jitter_factor=base_settings.llm_api_jitter_factor,
+        tavily_api_timeout_seconds=base_settings.tavily_api_timeout_seconds,
+        tavily_api_max_retries=base_settings.tavily_api_max_retries,
+        tavily_api_backoff_factor=base_settings.tavily_api_backoff_factor,
+        tavily_api_jitter_factor=base_settings.tavily_api_jitter_factor,
+        scheduler_digest_max_retries=base_settings.scheduler_digest_max_retries,
+        scheduler_digest_backoff_seconds=base_settings.scheduler_digest_backoff_seconds,
     )
 
     local_document = NewsDocument(
