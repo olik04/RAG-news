@@ -124,7 +124,7 @@ class NewsSentinelGraph:
 
         if mode == SearchMode.WEB:
             try:
-                documents = self.search.search(
+                documents = await self.search.search(
                     query,
                     days=self.settings.news_days_back,
                     top_k=self.settings.web_top_k,

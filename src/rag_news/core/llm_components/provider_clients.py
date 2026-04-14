@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from time import perf_counter
@@ -8,14 +9,16 @@ from typing import Any
 from google import genai
 from openai import AsyncOpenAI
 from rag_news.core.llm_components.telemetry import log_llm_event
+from rag_news.core.resilience import ResilienceConfig, with_timeout_and_retry
 
 
 logger = logging.getLogger(__name__)
 
 
 class OpenAIJsonProviderClient:
-    def __init__(self, client: AsyncOpenAI | None) -> None:
+    def __init__(self, client: AsyncOpenAI | None, resilience_config: ResilienceConfig | None = None) -> None:
         self.client = client
+        self.resilience_config = resilience_config or ResilienceConfig()
 
     async def chat_json(
         self,
@@ -53,14 +56,18 @@ class OpenAIJsonProviderClient:
             doc_count=doc_count,
         )
         try:
-            response = await self.client.chat.completions.create(
-                model=model,
-                temperature=0,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
+            response = await with_timeout_and_retry(
+                f"{operation}_openai",
+                self.resilience_config,
+                lambda: self.client.chat.completions.create(
+                    model=model,
+                    temperature=0,
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                ),
             )
         except Exception:  # pragma: no cover
             log_llm_event(
@@ -120,10 +127,11 @@ class OpenAIJsonProviderClient:
 
 
 class GoogleJsonProviderClient:
-    def __init__(self, client: genai.Client | None) -> None:
+    def __init__(self, client: genai.Client | None, resilience_config: ResilienceConfig | None = None) -> None:
         self.client = client
+        self.resilience_config = resilience_config or ResilienceConfig()
 
-    def chat_json(
+    async def chat_json(
         self,
         model: str,
         system_prompt: str,
@@ -159,13 +167,18 @@ class GoogleJsonProviderClient:
             doc_count=doc_count,
         )
         try:
-            response = self.client.models.generate_content(
-                model=model,
-                contents=user_prompt,
-                config=genai.types.GenerateContentConfig(
-                    temperature=0,
-                    response_mime_type="application/json",
-                    system_instruction=system_prompt,
+            response = await with_timeout_and_retry(
+                f"{operation}_google",
+                self.resilience_config,
+                lambda: asyncio.to_thread(
+                    self.client.models.generate_content,
+                    model=model,
+                    contents=user_prompt,
+                    config=genai.types.GenerateContentConfig(
+                        temperature=0,
+                        response_mime_type="application/json",
+                        system_instruction=system_prompt,
+                    ),
                 ),
             )
         except Exception:  # pragma: no cover

@@ -18,6 +18,7 @@ from rag_news.core.llm_components import (
     MistralQueryRewriter,
     OpenAIJsonProviderClient,
 )
+from rag_news.core.resilience import ResilienceConfig
 from rag_news.domain.models import GradeResult, NewsDocument
 
 
@@ -48,9 +49,23 @@ class NewsLLM:
         self.heuristic_rewriter = HeuristicQueryRewriter()
         self.heuristic_answer_generator = HeuristicAnswerGenerator()
 
-        mistral_provider = OpenAIJsonProviderClient(self.mistral_client)
-        groq_provider = OpenAIJsonProviderClient(self.groq_client)
-        google_provider = GoogleJsonProviderClient(self.google_client)
+        # Create resilience config for LLM provider calls
+        resilience_config = ResilienceConfig(
+            base_timeout_sec=settings.llm_resilience_timeout_seconds,
+            max_retries=settings.llm_resilience_max_retries,
+            backoff_factor=settings.llm_resilience_backoff_factor,
+            jitter_factor=settings.llm_resilience_jitter_factor,
+        )
+
+        mistral_provider = OpenAIJsonProviderClient(
+            self.mistral_client, resilience_config=resilience_config
+        )
+        groq_provider = OpenAIJsonProviderClient(
+            self.groq_client, resilience_config=resilience_config
+        )
+        google_provider = GoogleJsonProviderClient(
+            self.google_client, resilience_config=resilience_config
+        )
 
         self.document_grader = MistralDocumentGrader(
             settings,

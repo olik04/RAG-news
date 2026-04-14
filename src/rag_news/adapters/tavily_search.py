@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from logging import getLogger
 from typing import Any
 from urllib.parse import urlparse
@@ -8,6 +9,7 @@ from tavily import TavilyClient
 from tavily.errors import BadRequestError
 
 from rag_news.config.settings import Settings
+from rag_news.core.resilience import ResilienceConfig, with_timeout_and_retry
 from rag_news.domain.models import NewsDocument
 
 
@@ -23,7 +25,7 @@ class TavilyNewsSearch:
             else None
         )
 
-    def search(
+    async def search(
         self, query: str, *, days: int | None = None, top_k: int | None = None
     ) -> list[NewsDocument]:
         if self.client is None:
@@ -33,31 +35,52 @@ class TavilyNewsSearch:
             return []
 
         request_days = days or self.settings.news_days_back
+        config = ResilienceConfig(
+            base_timeout_sec=self.settings.tavily_resilience_timeout_seconds,
+            max_retries=self.settings.tavily_resilience_max_retries,
+            backoff_factor=self.settings.tavily_resilience_backoff_factor,
+            jitter_factor=self.settings.tavily_resilience_jitter_factor,
+        )
+
+        response: dict[str, Any] = {}
         try:
-            response = self.client.search(
-                query=query,
-                topic="news",
-                days=request_days,
-                max_results=top_k or self.settings.web_top_k,
+            response = await with_timeout_and_retry(
+                "tavily_search",
+                config,
+                lambda: asyncio.to_thread(
+                    self.client.search,
+                    query=query,
+                    topic="news",
+                    days=request_days,
+                    max_results=top_k or self.settings.web_top_k,
+                ),
             )
-        except BadRequestError as exc:
-            # Tavily may reject combinations of days and implicit date windows from upstream.
-            if "When days is set" in str(exc):
+        except Exception as exc:
+            # Handle validation/user errors: Tavily may reject certain query combinations
+            if isinstance(exc, BadRequestError) and "When days is set" in str(exc):
                 logger.warning(
                     "Tavily rejected days-based query; retrying without days for query: %s",
                     query,
                 )
-                response = self.client.search(
-                    query=query,
-                    topic="news",
-                    max_results=top_k or self.settings.web_top_k,
-                )
+                try:
+                    response = await with_timeout_and_retry(
+                        "tavily_search_no_days",
+                        config,
+                        lambda: asyncio.to_thread(
+                            self.client.search,
+                            query=query,
+                            topic="news",
+                            max_results=top_k or self.settings.web_top_k,
+                        ),
+                    )
+                except Exception as retry_exc:
+                    logger.warning(
+                        "Tavily search without days failed: %s", type(retry_exc).__name__
+                    )
+                    return []
             else:
                 logger.warning("Tavily search failed: %s", type(exc).__name__)
                 return []
-        except Exception as exc:  # pragma: no cover - defensive fallback
-            logger.warning("Tavily search failed: %s", type(exc).__name__)
-            return []
 
         results = response.get("results", []) if isinstance(response, dict) else []
         documents: list[NewsDocument] = []

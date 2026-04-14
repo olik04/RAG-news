@@ -317,7 +317,7 @@ class GoogleAnalysisAnswerGenerator:
             duration_ms=0,
             doc_count=len(documents),
         )
-        response = self.client.chat_json(
+        response = await self.client.chat_json(
             self.settings.google_model,
             prompt,
             json.dumps(payload),
