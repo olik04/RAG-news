@@ -36,6 +36,15 @@ class DigestScheduler:
             id="daily_digest",
             replace_existing=True,
         )
+        if self.service.settings.news_retention_enabled:
+            self.scheduler.add_job(
+                self._purge_stale_documents,
+                trigger="cron",
+                hour=self.service.settings.purge_hour,
+                minute=self.service.settings.purge_minute,
+                id="daily_purge",
+                replace_existing=True,
+            )
         self.scheduler.start()
 
     async def _send_digest(self) -> None:
@@ -43,7 +52,7 @@ class DigestScheduler:
             logger.warning("Telegram is not configured; skipping scheduled digest")
             return
 
-        attempts = 3
+        attempts = self.service.settings.scheduler_digest_max_retries
         for attempt in range(1, attempts + 1):
             try:
                 result = await self.service.graph.build_digest(
@@ -65,6 +74,20 @@ class DigestScheduler:
                     type(exc).__name__,
                 )
                 if attempt < attempts:
-                    await asyncio.sleep(2 * attempt)
+                    await asyncio.sleep(
+                        self.service.settings.scheduler_digest_backoff_seconds * attempt
+                    )
 
         logger.error("Scheduled digest failed after %s attempts", attempts)
+
+    async def _purge_stale_documents(self) -> None:
+        """Purge documents older than the retention period."""
+        try:
+            result = await self.service.repository.purge_stale_documents()
+            logger.info(
+                "Scheduled document purge completed: deleted=%d, remaining=%d",
+                result["deleted_count"],
+                result["remaining_count"],
+            )
+        except Exception as exc:  # pragma: no cover - persistence failures
+            logger.error("Scheduled document purge failed: %s", type(exc).__name__)

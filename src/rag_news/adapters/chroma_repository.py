@@ -123,6 +123,109 @@ class ChromaNewsRepository:
             )
             return 0
 
+    async def purge_stale_documents(
+        self, source: str | None = None
+    ) -> dict[str, int]:
+        """
+        Purge documents older than the retention period from the collection.
+
+        Args:
+            source: Optional source filter. If provided, only documents from this source are purged.
+
+        Returns:
+            A dict with 'deleted_count' and 'remaining_count'.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            days=self.settings.news_retention_days
+        )
+        cutoff_ts = int(cutoff.timestamp())
+        batch_size = self.settings.purge_batch_size
+        deleted_count = 0
+        scanned_count = 0
+
+        # Fast path: purge docs carrying normalized numeric timestamps.
+        where_clause: dict[str, Any]
+        if source:
+            where_clause = {
+                "$and": [
+                    {"source": source},
+                    {"published_at_ts": {"$lt": cutoff_ts}},
+                ]
+            }
+        else:
+            where_clause = {"published_at_ts": {"$lt": cutoff_ts}}
+
+        try:
+            response = self.collection.get(where=where_clause)
+            timestamp_ids = response.get("ids") or []
+            if timestamp_ids:
+                self.collection.delete(ids=timestamp_ids)
+                deleted_count += len(timestamp_ids)
+        except Exception as exc:  # pragma: no cover - persistence backend dependent
+            raise RepositoryError("Failed to purge timestamp-indexed stale documents") from exc
+
+        # Fallback for legacy documents lacking published_at_ts.
+        offset = 0
+        legacy_ids_to_delete: list[str] = []
+        while True:
+            try:
+                page = self.collection.get(
+                    include=["metadatas"],
+                    limit=batch_size,
+                    offset=offset,
+                )
+            except Exception as exc:  # pragma: no cover - persistence backend dependent
+                raise RepositoryError("Failed to fetch documents for purge") from exc
+
+            page_ids = page.get("ids") or []
+            page_metadatas = page.get("metadatas") or []
+            if not page_ids:
+                break
+
+            for doc_id, metadata in zip(page_ids, page_metadatas):
+                scanned_count += 1
+                record = metadata or {}
+                if source and record.get("source") != source:
+                    continue
+
+                published_at_ts = record.get("published_at_ts")
+                if isinstance(published_at_ts, (int, float)):
+                    continue
+
+                published_at_str = str(record.get("published_at") or "")
+                published_at = self._parse_datetime(published_at_str)
+                if published_at is not None and published_at < cutoff:
+                    legacy_ids_to_delete.append(str(doc_id))
+
+            offset += batch_size
+
+        if legacy_ids_to_delete:
+            try:
+                self.collection.delete(ids=legacy_ids_to_delete)
+                deleted_count += len(legacy_ids_to_delete)
+            except Exception as exc:  # pragma: no cover - persistence backend dependent
+                raise RepositoryError(
+                    f"Failed to delete {len(legacy_ids_to_delete)} legacy stale documents"
+                ) from exc
+
+        # Get remaining document count
+        remaining_count = self.count()
+
+        logger.info(
+            "Document purge completed: deleted=%d, remaining=%d, scanned=%d (source=%s, retention=%d days)",
+            deleted_count,
+            remaining_count,
+            scanned_count,
+            source or "all",
+            self.settings.news_retention_days,
+        )
+
+        return {
+            "deleted_count": deleted_count,
+            "remaining_count": remaining_count,
+            "scanned_count": scanned_count,
+        }
+
     @staticmethod
     def _compose_document_text(document: NewsDocument) -> str:
         parts = [

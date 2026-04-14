@@ -34,11 +34,26 @@ class NewsDocument:
             self.id = _stable_id(self.title, self.url, self.content[:128])
 
     def to_metadata(self) -> dict[str, Any]:
+        published_at_ts = None
+        if self.published_at:
+            normalized = self.published_at.strip()
+            if normalized.endswith("Z"):
+                normalized = normalized[:-1] + "+00:00"
+            try:
+                parsed = datetime.fromisoformat(normalized)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                published_at_ts = int(parsed.timestamp())
+            except ValueError:
+                published_at_ts = None
+
         return {
             "title": self.title,
             "url": self.url,
             "source": self.source,
             "published_at": self.published_at,
+            "published_at_ts": published_at_ts,
+            "ingested_at_ts": int(datetime.now(timezone.utc).timestamp()),
             "query": self.query,
             "summary": self.summary,
             "score": self.score,
